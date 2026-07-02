@@ -276,153 +276,35 @@ function getFallbackGuide(city) {
 // clara no PDF (ex. datas difíceis de ler num documento digitalizado) —
 // nunca substitui o que o PDF já diz claramente.
 async function classifyVoucherWithAI(fileUrl, serviceText) {
-  const pdfRes = await fetch(fileUrl);
-  if (!pdfRes.ok) throw new Error(`Erro ao obter o PDF: ${pdfRes.status}`);
-  const blob = await pdfRes.blob();
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-
-  const supplementHint = serviceText
-    ? `\n\nComo apoio complementar, eis o texto do serviço associado a este documento no sistema da agência: "${serviceText}". Usa isto APENAS para completar informação que esteja em falta ou pouco clara no PDF (ex. datas, nome do local) — a informação do PDF é sempre a fonte principal e tem prioridade sobre este texto sempre que houver conflito.`
-    : "";
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${CONFIG.BACKEND_URL}/api/ai-classify-voucher`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 300,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-            {
-              type: "text",
-              text: `Este é um documento de viagem anexado a uma reserva. Lê o conteúdo e identifica o que é. Se for um PROGRAMA COMPLETO da viagem (descrição dia a dia de vários dias, com atividades/visitas — não apenas um único serviço), classifica como "Programa". Se for o voucher de um único serviço, classifica-o normalmente.${supplementHint} Responde APENAS com um objeto JSON, sem texto antes ou depois, sem markdown: {"category": "Programa|Alojamento|Transfer|Rent-a-Car|Seguro|Outro", "title": "título curto e claro em português de Portugal, ex. 'Voucher Hotel XPTO' ou 'Programa da Viagem'", "detail": "uma frase curta com o essencial — datas, local ou referência — em português de Portugal"}`,
-            },
-          ],
-        },
-      ],
-    }),
+    body: JSON.stringify({ fileUrl, serviceText }),
   });
-  if (!res.ok) throw new Error(`Erro da API: ${res.status}`);
-  const data = await res.json();
-  const text = (data.content ?? [])
-    .map((b) => b.text || "")
-    .join("")
-    .replace(/```json|```/g, "")
-    .trim();
-  return JSON.parse(text);
+  if (!res.ok) throw new Error(`Erro do backend: ${res.status}`);
+  return res.json();
 }
 
-// Quando um documento é classificado como "Programa" (ver
-// classifyVoucherWithAI), este documento — não os vouchers de serviços
-// individuais — é a MELHOR fonte para construir o itinerário dia a dia,
-// tal como foi feito manualmente para a viagem do Japão a partir do PDF
-// do programa. Esta função automatiza esse mesmo processo: lê o PDF
-// completo e devolve os dias estruturados no formato da app.
-// IMPORTANTE: só incluir refeições nos dias se o programa as identificar
-// claramente nesse dia — nunca distribuir/inventar a partir de um total
-// agregado (ver regra já estabelecida sobre refeições).
 async function generateItineraryFromProgramPDF(fileUrl) {
-  const pdfRes = await fetch(fileUrl);
-  if (!pdfRes.ok) throw new Error(`Erro ao obter o PDF do programa: ${pdfRes.status}`);
-  const blob = await pdfRes.blob();
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${CONFIG.BACKEND_URL}/api/ai-itinerary-from-pdf`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-            {
-              type: "text",
-              text: `Este é o programa completo de uma viagem. Lê-o com atenção e estrutura-o dia a dia, em português de Portugal, com fidelidade total ao texto original — não inventes nem acrescentes atividades, locais, refeições ou notas que não estejam explicitamente no documento.
-
-Regra crítica sobre refeições: só inclui uma refeição (almoço/jantar) num dia se o programa a identificar claramente NESSE dia específico. Se o documento só indicar um total agregado de refeições (ex. "7 almoços + 6 jantares") sem dizer em que dias, NÃO distribuas nem inventes refeições por dia — simplesmente não incluas nenhuma atividade de refeição.
-
-Responde APENAS com um array JSON, sem texto antes ou depois, sem markdown, no formato: [{"id": 1, "city": "nome da cidade nesse dia", "label": "dia da semana abreviado, ex. 'Seg'", "date": "data curta, ex. '15 Ago'", "title": "título curto do dia", "activities": [{"time": "HH:MM ou vazio", "icon": "plane|car|hotel|food|map", "title": "", "location": "", "note": "frase curta"}]}]`,
-            },
-          ],
-        },
-      ],
-    }),
+    body: JSON.stringify({ fileUrl }),
   });
-  if (!res.ok) throw new Error(`Erro da API: ${res.status}`);
-  const data = await res.json();
-  const text = (data.content ?? [])
-    .map((b) => b.text || "")
-    .join("")
-    .replace(/```json|```/g, "")
-    .trim();
-  const days = JSON.parse(text);
+  if (!res.ok) throw new Error(`Erro do backend: ${res.status}`);
+  const days = await res.json();
   if (!Array.isArray(days) || days.length === 0) throw new Error("Itinerário vazio");
   return days;
 }
 
-// SEGUNDO NÍVEL DE RECURSO — usado quando NÃO existe nenhum documento
-// "Programa" completo na reserva. Em vez de ficar sem itinerário, a app
-// olha para todos os documentos já classificados (voos, vouchers de
-// hotel, transfers, etc.) e tenta reconstruir, a partir desses dados:
-// 1. O destino (ou destinos, se for uma viagem multi-cidade) — sobretudo
-//    a partir dos voos;
-// 2. Um esboço cronológico do itinerário — a partir das datas de
-//    check-in/check-out de hotel, voos, e outros vouchers com data.
-// Esta reconstrução é deliberadamente mais pobre do que ler um Programa
-// completo (não tem atividades turísticas, só a logística que os
-// documentos revelam) — fiel apenas ao que os documentos efetivamente
-// mostram, nunca inventando visitas ou atividades.
 async function inferTripFromDocuments(documents) {
-  const summary = documents
-    .filter((d) => d.title || d.detail || d.serviceText)
-    .map((d, i) => `Documento ${i + 1}: tipo=${d.type}; título=${d.title || "—"}; detalhe=${d.detail || "—"}; texto do serviço=${d.serviceText || "—"}`)
-    .join("\n");
-
-  if (!summary.trim()) throw new Error("Sem documentos suficientes para reconstruir o itinerário");
-
-  const prompt = `Aqui está uma lista de documentos/vouchers de uma reserva de viagem, sem um programa narrativo completo disponível. Com base sobretudo nos voos (para determinar o destino ou destinos da viagem) e nas datas de estadias em hotéis, transfers e outros vouchers (para reconstruir a cronologia), tenta determinar:
-
-1. O destino da viagem — uma cidade, ou várias separadas por " / " se for uma viagem multi-destino;
-2. Um esboço do itinerário dia a dia, em ordem cronológica, com base APENAS no que estes documentos efetivamente revelam — não inventes atividades turísticas, visitas ou refeições que não estejam implícitas nestes documentos. Cada dia deve refletir só a logística que os documentos mostram (voo, check-in/check-out de hotel, transfer, etc.).
-
-Documentos:
-${summary}
-
-Responde APENAS com um objeto JSON, sem texto antes ou depois, sem markdown: {"destination": "", "days": [{"id": 1, "city": "", "label": "dia da semana abreviado, ex. 'Seg'", "date": "data curta, ex. '15 Ago'", "title": "título curto do dia", "activities": [{"time": "HH:MM ou vazio", "icon": "plane|car|hotel|food|map", "title": "", "location": "", "note": "frase curta"}]}]}`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${CONFIG.BACKEND_URL}/api/ai-infer-trip-from-documents`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 3000,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify({ documents }),
   });
-  if (!res.ok) throw new Error(`Erro da API: ${res.status}`);
-  const data = await res.json();
-  const text = (data.content ?? [])
-    .map((b) => b.text || "")
-    .join("")
-    .replace(/```json|```/g, "")
-    .trim();
-  const result = JSON.parse(text);
+  if (!res.ok) throw new Error(`Erro do backend: ${res.status}`);
+  const result = await res.json();
   if (!result.destination || !Array.isArray(result.days) || result.days.length === 0) {
     throw new Error("Reconstrução incompleta");
   }
@@ -1476,7 +1358,7 @@ function CurrencyConverter({ currencyCode, currencySymbol }) {
   useEffect(() => {
     if (!currencyCode) return;
     setStatus("loading");
-    fetch(`https://api.frankfurter.app/latest?from=EUR&to=${currencyCode}`)
+    fetch(`https://open.er-api.com/v6/latest/EUR`)
       .then((res) => {
         if (!res.ok) throw new Error("Erro ao obter taxa de câmbio");
         return res.json();
