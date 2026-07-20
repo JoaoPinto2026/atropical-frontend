@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.svg"],
+      includeAssets: ["favicon.svg", "icon-192.png", "icon-512.png"],
       manifest: {
         name: "A Tropical — App de Viagem",
         short_name: "A Tropical",
@@ -20,10 +20,16 @@ export default defineConfig({
         start_url: "/",
         icons: [
           {
-            src: "favicon.svg",
-            sizes: "any",
-            type: "image/svg+xml",
-            purpose: "any"
+            src: "icon-192.png",
+            sizes: "192x192",
+            type: "image/png",
+            purpose: "any maskable"
+          },
+          {
+            src: "icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "any maskable"
           }
         ]
       },
@@ -43,19 +49,3 @@ export default defineConfig({
             handler: "CacheFirst",
             options: {
               cacheName: "atropical-assets",
-              expiration: { maxEntries: 10, maxAgeSeconds: 30 * 24 * 60 * 60 }
-            }
-          },
-          {
-            urlPattern: /^https:\/\/open\.er-api\.com\/.*/i,
-            handler: "StaleWhileRevalidate",
-            options: {
-              cacheName: "exchange-rates",
-              expiration: { maxEntries: 5, maxAgeSeconds: 60 * 60 }
-            }
-          }
-        ]
-      }
-    })
-  ]
-});
