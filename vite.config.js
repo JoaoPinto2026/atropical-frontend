@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.png"],
+      includeAssets: ["favicon.svg"],
       manifest: {
         name: "A Tropical — App de Viagem",
         short_name: "A Tropical",
@@ -20,26 +20,17 @@ export default defineConfig({
         start_url: "/",
         icons: [
           {
-            src: "favicon.png",
-            sizes: "192x192",
-            type: "image/png",
-            purpose: "any maskable"
-          },
-          {
-            src: "favicon.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "any maskable"
+            src: "favicon.svg",
+            sizes: "any",
+            type: "image/svg+xml",
+            purpose: "any"
           }
         ]
       },
       workbox: {
-        // Guarda em cache os ficheiros estáticos da app
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
-        // Estratégia: tenta a rede primeiro, cai para cache se offline
         runtimeCaching: [
           {
-            // Imagens do Unsplash (fotos das cidades)
             urlPattern: /^https:\/\/images\.unsplash\.com\/.*/i,
             handler: "CacheFirst",
             options: {
@@ -48,7 +39,6 @@ export default defineConfig({
             }
           },
           {
-            // Logo e imagens do site A Tropical
             urlPattern: /^https:\/\/www\.atropical\.pt\/.*/i,
             handler: "CacheFirst",
             options: {
@@ -57,7 +47,6 @@ export default defineConfig({
             }
           },
           {
-            // Taxa de câmbio — cache de 1 hora, depois tenta atualizar
             urlPattern: /^https:\/\/open\.er-api\.com\/.*/i,
             handler: "StaleWhileRevalidate",
             options: {
