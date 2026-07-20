@@ -25,6 +25,7 @@ import {
   Send,
   Globe,
   LogOut,
+  WifiOff,
 } from "lucide-react";
 
 const C = {
@@ -1574,8 +1575,21 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("itinerary");
   const [supportOpen, setSupportOpen] = useState(false);
   const [activeDay, setActiveDay] = useState(() => findTodayDayId(MOCK_TRIP.days));
-  const [guideCache, setGuideCache] = useState({}); // { [city]: { status: 'loading'|'ai'|'fallback', items } }
-  const [voucherCache, setVoucherCache] = useState({}); // { [fileUrl]: { status: 'loading'|'done'|'error', data } }
+  const [guideCache, setGuideCache] = useState({});
+  const [voucherCache, setVoucherCache] = useState({});
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  // Deteta quando o dispositivo fica sem/com internet
+  useEffect(() => {
+    const goOffline = () => setIsOffline(true);
+    const goOnline = () => setIsOffline(false);
+    window.addEventListener("offline", goOffline);
+    window.addEventListener("online", goOnline);
+    return () => {
+      window.removeEventListener("offline", goOffline);
+      window.removeEventListener("online", goOnline);
+    };
+  }, []);
 
   useEffect(() => {
     const pending = (trip.documents ?? []).filter((d) => d.needsClassification && d.fileUrl && !voucherCache[d.fileUrl]);
@@ -1777,6 +1791,14 @@ export default function App() {
           <>
             <Header trip={trip} city={currentCity} dayId={activeDay} passengerName={passengerName} />
         {CONFIG.SHOW_FALLBACK_BANNER && <DataSourceBanner usingFallback={usingFallback} />}
+        {isOffline && (
+          <div className="flex items-center gap-2 px-4 py-2" style={{ background: "#FFF3CD", borderBottom: `1px solid #FFE08A` }}>
+            <WifiOff size={12} color="#856404" />
+            <p className="text-[11px]" style={{ color: "#856404", fontFamily: "Inter, sans-serif" }}>
+              Sem ligação — a mostrar dados guardados no seu dispositivo.
+            </p>
+          </div>
+        )}
 
         <>
             {activeTab === "itinerary" && (
