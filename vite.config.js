@@ -49,3 +49,19 @@ export default defineConfig({
             handler: "CacheFirst",
             options: {
               cacheName: "atropical-assets",
+              expiration: { maxEntries: 10, maxAgeSeconds: 30 * 24 * 60 * 60 }
+            }
+          },
+          {
+            urlPattern: /^https:\/\/open\.er-api\.com\/.*/i,
+            handler: "StaleWhileRevalidate",
+            options: {
+              cacheName: "exchange-rates",
+              expiration: { maxEntries: 5, maxAgeSeconds: 60 * 60 }
+            }
+          }
+        ]
+      }
+    })
+  ]
+});
