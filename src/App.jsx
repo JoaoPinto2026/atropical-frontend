@@ -260,13 +260,21 @@ function getFallbackGuide(city) {
   ];
 }
 
-// Duração da cache do Guia: 6 horas. Enquanto não passar este tempo desde
-// a última pesquisa para um dia/cidade, reaproveita-se o resultado
-// guardado em vez de gastar uma pesquisa nova — tanto no pré-carregamento
-// automático como ao reabrir a app mais tarde no mesmo dia. O botão de
-// atualizar manual ignora esta regra de propósito.
-const GUIDE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+// Duração da cache automática do Guia: só atualiza no dia civil seguinte
+// (à meia-noite), independentemente da hora — enquanto for o mesmo dia,
+// reaproveita-se sempre o resultado guardado, mesmo que já tenham passado
+// várias horas. Só o botão de atualizar manual (mais abaixo) pode forçar
+// uma pesquisa nova dentro do mesmo dia, dentro do seu próprio limite.
 const GUIDE_CACHE_STORAGE_PREFIX = "atropical-guide-cache:";
+
+// Compara se dois instantes caem no mesmo dia civil (ano, mês e dia
+// iguais) — usado para decidir se a cache automática do Guia ainda é
+// válida "hoje", independentemente de quantas horas passaram.
+function isSameCalendarDay(timestampA, timestampB) {
+  const a = new Date(timestampA);
+  const b = new Date(timestampB);
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
 
 // Lê do localStorage do telemóvel o resultado guardado para um dia/cidade
 // em concreto (chave "Cidade::idDoDia"). Sobrevive a fechar e reabrir a
@@ -1746,7 +1754,7 @@ export default function App() {
   // ecrã de login e exige inserir o código de reserva e o nome outra vez.
   // Não conta tempo enquanto está no ecrã de login ou na curiosidade do
   // destino — só depois de já estar dentro da app.
-  const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
+  const INACTIVITY_LIMIT_MS = 60 * 60 * 1000;
   const lastActivityRef = useRef(Date.now());
 
   useEffect(() => {
@@ -1849,37 +1857,42 @@ export default function App() {
     }
   };
 
-  // PRÉ-CARREGAMENTO DE TODOS OS DIAS, COM CACHE DE 6 HORAS — assim que a
-  // app abre, a pesquisa em tempo real corre em segundo plano para todos
-  // os dias da viagem. Para cada dia, primeiro verifica se já há um
-  // resultado guardado (na memória da sessão atual, ou no localStorage do
-  // telemóvel, que sobrevive a fechar/reabrir a app) com menos de 6 horas
-  // — se sim, reaproveita-o sem gastar uma pesquisa nova. Só pesquisa de
-  // novo se não houver nada guardado, ou se já tiverem passado as 6 horas.
-  // O botão de atualizar manual (ver mais abaixo) ignora esta regra de
-  // propósito e força sempre uma pesquisa nova, reiniciando a contagem.
+  // PRÉ-CARREGAMENTO LIMITADO AOS PRÓXIMOS 3 DIAS — dia atual, seguinte, e
+  // o dia depois desse. O dia anterior não precisa de pré-carregamento
+  // porque já foi pesquisado quando era ele o "dia atual" (fica guardado
+  // em cache/localStorage e é reaproveitado sem qualquer pesquisa nova).
+  // Ao mudar de dia, este efeito corre de novo e desloca a janela para a
+  // frente — assim, ao navegar naturalmente pela viagem, os próximos dias
+  // vão sempre ficando prontos com antecedência, sem gastar pesquisas em
+  // dias muito distantes que o cliente pode nunca chegar a ver. Continua
+  // a aplicar-se a regra de só atualizar automaticamente no dia civil
+  // seguinte (ver isSameCalendarDay), e o botão de atualizar manual
+  // continua a ignorar esta janela e a funcionar em qualquer dia.
   useEffect(() => {
     if (stage !== "app") return;
-    (trip.days ?? []).forEach((d) => {
+    const currentIndex = trip.days.findIndex((d) => d.id === activeDay);
+    if (currentIndex === -1) return;
+    const nearbyDays = trip.days.slice(currentIndex, currentIndex + 3);
+    nearbyDays.forEach((d) => {
       const key = `${d.city}::${d.id}`;
       const when = `${d.label}, ${d.date}`;
       const inMemory = guideCache[key];
 
       if (inMemory && inMemory.status === "loading") return; // já em curso
-      if (inMemory && inMemory.fetchedAt && Date.now() - inMemory.fetchedAt < GUIDE_CACHE_TTL_MS) return; // ainda válido em memória
+      if (inMemory && inMemory.fetchedAt && isSameCalendarDay(inMemory.fetchedAt, Date.now())) return; // ainda é hoje
 
       if (!inMemory) {
         const stored = loadGuideCacheEntry(key);
-        if (stored && stored.fetchedAt && Date.now() - stored.fetchedAt < GUIDE_CACHE_TTL_MS) {
+        if (stored && stored.fetchedAt && isSameCalendarDay(stored.fetchedAt, Date.now())) {
           setGuideCache((prev) => ({ ...prev, [key]: stored }));
-          return; // reaproveita o resultado guardado no telemóvel, ainda dentro das 6h
+          return; // reaproveita o resultado guardado no telemóvel, ainda é hoje
         }
       }
 
       runGuideFetch(key, d.city, when);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, trip.days]);
+  }, [stage, trip.days, activeDay]);
 
   const currentGuide = guideCache[guideCacheKey];
   const guideItems = currentGuide?.items ?? null;
