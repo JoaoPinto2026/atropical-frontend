@@ -1751,24 +1751,30 @@ export default function App() {
   const countryInfo = COUNTRY_INFO[trip.country] ?? COUNTRY_INFO.default;
   const whenLabel = `${day.label}, ${day.date}`;
 
-  const runGuideFetch = async (city, when) => {
-    setGuideCache((prev) => ({ ...prev, [city]: { status: "loading", items: prev[city]?.items ?? null } }));
+  // A chave da cache combina cidade + dia: assim, mudar de dia dispara
+  // sempre uma pesquisa nova (mesmo que a cidade não mude entre dois dias
+  // seguidos, ex. várias noites na mesma cidade), em vez de reaproveitar
+  // sugestões antigas de outro dia.
+  const guideCacheKey = `${currentCity}::${activeDay}`;
+
+  const runGuideFetch = async (cacheKey, city, when) => {
+    setGuideCache((prev) => ({ ...prev, [cacheKey]: { status: "loading", items: prev[cacheKey]?.items ?? null } }));
     try {
       const { items, status, sourceLabel } = await fetchGuide(city, when);
-      setGuideCache((prev) => ({ ...prev, [city]: { status, items, sourceLabel } }));
+      setGuideCache((prev) => ({ ...prev, [cacheKey]: { status, items, sourceLabel } }));
     } catch (e) {
-      setGuideCache((prev) => ({ ...prev, [city]: { status: "fallback", items: getFallbackGuide(city) } }));
+      setGuideCache((prev) => ({ ...prev, [cacheKey]: { status: "fallback", items: getFallbackGuide(city) } }));
     }
   };
 
   useEffect(() => {
     if (activeTab !== "guide") return;
-    if (guideCache[currentCity]) return; // já temos dados (ou estão a carregar) para esta cidade
-    runGuideFetch(currentCity, whenLabel);
+    if (guideCache[guideCacheKey]) return; // já temos dados (ou estão a carregar) para este dia/cidade
+    runGuideFetch(guideCacheKey, currentCity, whenLabel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, currentCity]);
+  }, [activeTab, currentCity, activeDay]);
 
-  const currentGuide = guideCache[currentCity];
+  const currentGuide = guideCache[guideCacheKey];
   const guideItems = currentGuide?.items ?? null;
   const guideStatus = currentGuide?.status ?? "loading";
   const filteredGuide = (guideItems ?? []).filter((g) => guideFilter === "todos" || g.category === guideFilter);
@@ -1846,46 +1852,49 @@ export default function App() {
             )}
 
             {activeTab === "guide" && (
-              <div className="flex-1 overflow-y-auto px-4 pt-4">
-                <div className="flex items-center justify-between mb-1">
-                  <div>
-                    <h2 className="text-lg" style={{ color: C.ink, fontFamily: "Fraunces, serif", fontWeight: 600 }}>Guia de {currentCity}</h2>
-                    <p className="text-[11px]" style={{ color: C.ink + "80", fontFamily: "Inter, sans-serif" }}>{day.label}, {day.date}</p>
+              <>
+                <DaySelector days={trip.days} activeDay={activeDay} setActiveDay={setActiveDay} />
+                <div className="flex-1 overflow-y-auto px-4 pt-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <div>
+                      <h2 className="text-lg" style={{ color: C.ink, fontFamily: "Fraunces, serif", fontWeight: 600 }}>Guia de {currentCity}</h2>
+                      <p className="text-[11px]" style={{ color: C.ink + "80", fontFamily: "Inter, sans-serif" }}>{day.label}, {day.date}</p>
+                    </div>
+                    <button onClick={() => runGuideFetch(guideCacheKey, currentCity, whenLabel)} className="p-1.5 rounded-full focus:outline-none" style={{ background: C.card, border: `1px solid ${C.mist}` }} aria-label="Atualizar sugestões">
+                      <RefreshCw size={13} color={C.orange} className={guideStatus === "loading" ? "animate-spin" : ""} />
+                    </button>
                   </div>
-                  <button onClick={() => runGuideFetch(currentCity, whenLabel)} className="p-1.5 rounded-full focus:outline-none" style={{ background: C.card, border: `1px solid ${C.mist}` }} aria-label="Atualizar sugestões">
-                    <RefreshCw size={13} color={C.orange} className={guideStatus === "loading" ? "animate-spin" : ""} />
-                  </button>
-                </div>
 
-                {guideStatus === "paid" && (
-                  <p className="text-[11px] mb-2 mt-2" style={{ color: C.orange, fontFamily: "Inter, sans-serif" }}>
-                    Dados em tempo real via {currentGuide?.sourceLabel}.
-                  </p>
-                )}
-                {guideStatus === "ai" && (
-                  <p className="text-[11px] mb-2 mt-2" style={{ color: C.orange, fontFamily: "Inter, sans-serif" }}>
-                    Sugestões atualizadas com pesquisa em tempo real.
-                  </p>
-                )}
-                {guideStatus === "fallback" && (
-                  <p className="text-[11px] mb-2 mt-2" style={{ color: C.ink + "99", fontFamily: "Inter, sans-serif" }}>
-                    Sugestões de exemplo — não foi possível obter dados em tempo real.
-                  </p>
-                )}
-
-                <CategoryChips active={guideFilter} setActive={setGuideFilter} />
-
-                {guideStatus === "loading" && !guideItems ? (
-                  <div className="py-10 flex flex-col items-center gap-2">
-                    <RefreshCw size={20} color={C.orange} className="animate-spin" />
-                    <p className="text-xs text-center" style={{ color: C.ink + "99", fontFamily: "Inter, sans-serif" }}>
-                      A procurar atividades, gastronomia, museus e eventos em {currentCity}...
+                  {guideStatus === "paid" && (
+                    <p className="text-[11px] mb-2 mt-2" style={{ color: C.orange, fontFamily: "Inter, sans-serif" }}>
+                      Dados em tempo real via {currentGuide?.sourceLabel}.
                     </p>
-                  </div>
-                ) : (
-                  filteredGuide.map((g, i) => <GuideCard key={i} g={g} />)
-                )}
-              </div>
+                  )}
+                  {guideStatus === "ai" && (
+                    <p className="text-[11px] mb-2 mt-2" style={{ color: C.orange, fontFamily: "Inter, sans-serif" }}>
+                      Sugestões atualizadas com pesquisa em tempo real.
+                    </p>
+                  )}
+                  {guideStatus === "fallback" && (
+                    <p className="text-[11px] mb-2 mt-2" style={{ color: C.ink + "99", fontFamily: "Inter, sans-serif" }}>
+                      Sugestões de exemplo — não foi possível obter dados em tempo real.
+                    </p>
+                  )}
+
+                  <CategoryChips active={guideFilter} setActive={setGuideFilter} />
+
+                  {guideStatus === "loading" && !guideItems ? (
+                    <div className="py-10 flex flex-col items-center gap-2">
+                      <RefreshCw size={20} color={C.orange} className="animate-spin" />
+                      <p className="text-xs text-center" style={{ color: C.ink + "99", fontFamily: "Inter, sans-serif" }}>
+                        A procurar atividades, gastronomia, museus e eventos em {currentCity}...
+                      </p>
+                    </div>
+                  ) : (
+                    filteredGuide.map((g, i) => <GuideCard key={i} g={g} />)
+                  )}
+                </div>
+              </>
             )}
           </>
 
@@ -1914,3 +1923,4 @@ export default function App() {
     </div>
   );
 }
+
