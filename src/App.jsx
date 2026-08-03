@@ -408,11 +408,11 @@ const DAY_PHOTOS = {
  * NA CIDADE DO DIA ATIVO. Ao mudar de dia (e por isso de cidade), o
  * Guia procura automaticamente sugestões novas para essa cidade.
  * ------------------------------------------------------------------ */
-async function fetchGuideFromAI(city, whenLabel) {
+async function fetchGuideFromAI(city, whenLabel, year) {
   const res = await fetch(`${CONFIG.BACKEND_URL}/api/ai-guide`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ city, whenLabel }),
+    body: JSON.stringify({ city, whenLabel, year }),
   });
   if (!res.ok) throw new Error(`Erro do backend: ${res.status}`);
   const parsed = await res.json();
@@ -521,7 +521,7 @@ async function fetchGuideFromGooglePlaces(city) {
  *    reserva sempre disponível. Esta ordem aplica-se a qualquer
  *    cidade ou país — não é específica do Japão.
  * ------------------------------------------------------------------ */
-async function fetchGuide(city, whenLabel) {
+async function fetchGuide(city, whenLabel, year) {
   if (CONFIG.TRIPADVISOR_API_KEY) {
     try {
       return { items: await fetchGuideFromTripAdvisor(city), status: "paid", sourceLabel: "TripAdvisor" };
@@ -536,7 +536,7 @@ async function fetchGuide(city, whenLabel) {
       /* cai para a próxima fonte */
     }
   }
-  return { items: await fetchGuideFromAI(city, whenLabel), status: "ai" };
+  return { items: await fetchGuideFromAI(city, whenLabel, year), status: "ai" };
 }
 
 function ActivityIcon({ name, color = C.bronze, size = 16 }) {
@@ -1765,10 +1765,16 @@ export default function App() {
   // sugestões antigas de outro dia.
   const guideCacheKey = `${currentCity}::${activeDay}`;
 
+  // Ano da viagem, extraído de trip.dates (ex. "15 — 25 de Agosto 2026")
+  // — enviado ao backend para que a pesquisa em tempo real do Guia saiba
+  // exatamente que ano procurar, em vez de a IA ter de adivinhar.
+  const tripYearMatch = (trip.dates || "").match(/\d{4}/);
+  const tripYear = tripYearMatch ? tripYearMatch[0] : new Date().getFullYear().toString();
+
   const runGuideFetch = async (cacheKey, city, when) => {
     setGuideCache((prev) => ({ ...prev, [cacheKey]: { status: "loading", items: prev[cacheKey]?.items ?? null } }));
     try {
-      const { items, status, sourceLabel } = await fetchGuide(city, when);
+      const { items, status, sourceLabel } = await fetchGuide(city, when, tripYear);
       setGuideCache((prev) => ({ ...prev, [cacheKey]: { status, items, sourceLabel } }));
     } catch (e) {
       setGuideCache((prev) => ({ ...prev, [cacheKey]: { status: "fallback", items: getFallbackGuide(city) } }));
@@ -1931,4 +1937,3 @@ export default function App() {
     </div>
   );
 }
-
