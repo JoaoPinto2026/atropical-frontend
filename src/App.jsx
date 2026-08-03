@@ -260,6 +260,69 @@ function getFallbackGuide(city) {
   ];
 }
 
+// Duração da cache do Guia: 6 horas. Enquanto não passar este tempo desde
+// a última pesquisa para um dia/cidade, reaproveita-se o resultado
+// guardado em vez de gastar uma pesquisa nova — tanto no pré-carregamento
+// automático como ao reabrir a app mais tarde no mesmo dia. O botão de
+// atualizar manual ignora esta regra de propósito.
+const GUIDE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const GUIDE_CACHE_STORAGE_PREFIX = "atropical-guide-cache:";
+
+// Lê do localStorage do telemóvel o resultado guardado para um dia/cidade
+// em concreto (chave "Cidade::idDoDia"). Sobrevive a fechar e reabrir a
+// app — é isso que permite que, por exemplo, abrir às 10h e voltar a
+// abrir às 12h continue a mostrar os mesmos resultados, mas abrir às 19h
+// já dispare uma pesquisa nova (mais de 6h depois).
+function loadGuideCacheEntry(cacheKey) {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(GUIDE_CACHE_STORAGE_PREFIX + cacheKey);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null; // entrada corrompida ou localStorage indisponível — ignora
+  }
+}
+
+function saveGuideCacheToStorage(cacheKey, entry) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(GUIDE_CACHE_STORAGE_PREFIX + cacheKey, JSON.stringify(entry));
+  } catch {
+    /* localStorage pode estar cheio ou indisponível — falha silenciosa, não bloqueia a app */
+  }
+}
+
+// LIMITE DE ATUALIZAÇÕES MANUAIS — no máximo 2 por cada 6 horas, por
+// dia/cidade. Independente da cache automática (que também usa uma janela
+// de 6h, mas para decidir se pesquisa sozinha) — este contador serve só
+// para o botão de atualizar manual, que de resto ignora sempre a cache.
+// Persistido em localStorage, para o limite também sobreviver a fechar e
+// reabrir a app.
+const MANUAL_REFRESH_MAX = 2;
+const MANUAL_REFRESH_WINDOW_MS = 6 * 60 * 60 * 1000;
+const MANUAL_REFRESH_STORAGE_PREFIX = "atropical-guide-manual:";
+
+function loadManualRefreshState(cacheKey) {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(MANUAL_REFRESH_STORAGE_PREFIX + cacheKey);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveManualRefreshState(cacheKey, state) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(MANUAL_REFRESH_STORAGE_PREFIX + cacheKey, JSON.stringify(state));
+  } catch {
+    /* falha silenciosa */
+  }
+}
+
 /* ------------------------------------------------------------------
  * MAPEAMENTO DA RESPOSTA DA OPTITRAVEL → FORMATO DA APP
  * Isto já não corre aqui — a app web já não fala diretamente com a
@@ -1676,6 +1739,7 @@ export default function App() {
 
   const [guideFilter, setGuideFilter] = useState("todos");
   const [stage, setStage] = useState("login"); // "login" | "teaser" | "app"
+  const [manualRefreshLimitHit, setManualRefreshLimitHit] = useState(false);
 
   // LOG OUT AUTOMÁTICO — depois de 30 minutos sem qualquer interação (toque,
   // clique, scroll, tecla) enquanto a app principal está aberta, volta ao
@@ -1775,23 +1839,82 @@ export default function App() {
     setGuideCache((prev) => ({ ...prev, [cacheKey]: { status: "loading", items: prev[cacheKey]?.items ?? null } }));
     try {
       const { items, status, sourceLabel } = await fetchGuide(city, when, tripYear);
-      setGuideCache((prev) => ({ ...prev, [cacheKey]: { status, items, sourceLabel } }));
+      const entry = { status, items, sourceLabel, fetchedAt: Date.now() };
+      setGuideCache((prev) => ({ ...prev, [cacheKey]: entry }));
+      saveGuideCacheToStorage(cacheKey, entry);
     } catch (e) {
-      setGuideCache((prev) => ({ ...prev, [cacheKey]: { status: "fallback", items: getFallbackGuide(city) } }));
+      const entry = { status: "fallback", items: getFallbackGuide(city), fetchedAt: Date.now() };
+      setGuideCache((prev) => ({ ...prev, [cacheKey]: entry }));
+      saveGuideCacheToStorage(cacheKey, entry);
     }
   };
 
+  // PRÉ-CARREGAMENTO DE TODOS OS DIAS, COM CACHE DE 6 HORAS — assim que a
+  // app abre, a pesquisa em tempo real corre em segundo plano para todos
+  // os dias da viagem. Para cada dia, primeiro verifica se já há um
+  // resultado guardado (na memória da sessão atual, ou no localStorage do
+  // telemóvel, que sobrevive a fechar/reabrir a app) com menos de 6 horas
+  // — se sim, reaproveita-o sem gastar uma pesquisa nova. Só pesquisa de
+  // novo se não houver nada guardado, ou se já tiverem passado as 6 horas.
+  // O botão de atualizar manual (ver mais abaixo) ignora esta regra de
+  // propósito e força sempre uma pesquisa nova, reiniciando a contagem.
   useEffect(() => {
-    if (activeTab !== "guide") return;
-    if (guideCache[guideCacheKey]) return; // já temos dados (ou estão a carregar) para este dia/cidade
-    runGuideFetch(guideCacheKey, currentCity, whenLabel);
+    if (stage !== "app") return;
+    (trip.days ?? []).forEach((d) => {
+      const key = `${d.city}::${d.id}`;
+      const when = `${d.label}, ${d.date}`;
+      const inMemory = guideCache[key];
+
+      if (inMemory && inMemory.status === "loading") return; // já em curso
+      if (inMemory && inMemory.fetchedAt && Date.now() - inMemory.fetchedAt < GUIDE_CACHE_TTL_MS) return; // ainda válido em memória
+
+      if (!inMemory) {
+        const stored = loadGuideCacheEntry(key);
+        if (stored && stored.fetchedAt && Date.now() - stored.fetchedAt < GUIDE_CACHE_TTL_MS) {
+          setGuideCache((prev) => ({ ...prev, [key]: stored }));
+          return; // reaproveita o resultado guardado no telemóvel, ainda dentro das 6h
+        }
+      }
+
+      runGuideFetch(key, d.city, when);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, currentCity, activeDay]);
+  }, [stage, trip.days]);
 
   const currentGuide = guideCache[guideCacheKey];
   const guideItems = currentGuide?.items ?? null;
   const guideStatus = currentGuide?.status ?? "loading";
   const filteredGuide = (guideItems ?? []).filter((g) => guideFilter === "todos" || g.category === guideFilter);
+
+  // Reinicia o aviso de limite atingido sempre que o cliente muda de dia —
+  // o limite é por dia/cidade, por isso o aviso de um dia não deve
+  // continuar a aparecer noutro.
+  useEffect(() => {
+    setManualRefreshLimitHit(false);
+  }, [guideCacheKey]);
+
+  const handleManualGuideRefresh = () => {
+    const now = Date.now();
+    const stored = loadManualRefreshState(guideCacheKey);
+    let windowStart = stored?.windowStart;
+    let count = stored?.count ?? 0;
+
+    // Passadas as 6h desde o primeiro clique nesta janela, reinicia a contagem.
+    if (!windowStart || now - windowStart >= MANUAL_REFRESH_WINDOW_MS) {
+      windowStart = now;
+      count = 0;
+    }
+
+    if (count >= MANUAL_REFRESH_MAX) {
+      setManualRefreshLimitHit(true);
+      return;
+    }
+
+    count += 1;
+    saveManualRefreshState(guideCacheKey, { windowStart, count });
+    setManualRefreshLimitHit(false);
+    runGuideFetch(guideCacheKey, currentCity, whenLabel);
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center py-10" style={{ background: C.page }}>
@@ -1874,10 +1997,16 @@ export default function App() {
                       <h2 className="text-lg" style={{ color: C.ink, fontFamily: "Fraunces, serif", fontWeight: 600 }}>Guia de {currentCity}</h2>
                       <p className="text-[11px]" style={{ color: C.ink + "80", fontFamily: "Inter, sans-serif" }}>{day.label}, {day.date}</p>
                     </div>
-                    <button onClick={() => runGuideFetch(guideCacheKey, currentCity, whenLabel)} className="p-1.5 rounded-full focus:outline-none" style={{ background: C.card, border: `1px solid ${C.mist}` }} aria-label="Atualizar sugestões">
+                    <button onClick={handleManualGuideRefresh} className="p-1.5 rounded-full focus:outline-none" style={{ background: C.card, border: `1px solid ${C.mist}` }} aria-label="Atualizar sugestões">
                       <RefreshCw size={13} color={C.orange} className={guideStatus === "loading" ? "animate-spin" : ""} />
                     </button>
                   </div>
+
+                  {manualRefreshLimitHit && (
+                    <p className="text-[11px] mb-2" style={{ color: "#B23A2E", fontFamily: "Inter, sans-serif" }}>
+                      Limite de atualizações manuais atingido para este dia (máx. 2 a cada 6 horas). Tente novamente mais tarde.
+                    </p>
+                  )}
 
                   {guideStatus === "paid" && (
                     <p className="text-[11px] mb-2 mt-2" style={{ color: C.orange, fontFamily: "Inter, sans-serif" }}>
