@@ -1058,7 +1058,15 @@ function findTodayDayId(days) {
 
 function DaySelector({ days, activeDay, setActiveDay }) {
   return (
-    <div className="flex gap-2 px-4 py-3 overflow-x-auto" style={{ background: C.paper, borderBottom: `1px solid ${C.mist}` }}>
+    <div
+      className="flex gap-2 px-4 py-3 overflow-x-auto"
+      style={{
+        background: C.paper,
+        borderBottom: `1px solid ${C.mist}`,
+        WebkitOverflowScrolling: "touch",
+        touchAction: "pan-x",
+      }}
+    >
       {days.map((d) => {
         const active = d.id === activeDay;
         return (
